@@ -1,0 +1,11 @@
+Package: docker2vm
+Version: 1.0-1
+Section: base
+Priority: optional
+Depends: docker | docker-ce
+Architecture: all
+Maintainer: Dennis Marttinen
+Description: Docker to VM
+ This application takes a docker image
+ and converts it into a VM image
+ (an ext4 block device file).

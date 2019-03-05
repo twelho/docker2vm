@@ -1,0 +1,99 @@
+#!/bin/bash -e
+
+IMAGE=""
+OUT_FILE=""
+SIZE="4096"
+REMOVE=false
+
+usage() {
+	cat <<- EOF
+	Usage:
+	    $0 -i|--image <image> -o|--output-file <path> [-s|--size <size>] [-r|--remove] [-h|--help]
+
+	Required Arguments:
+	    -i, --image <image>			Docker image name to create VM from
+	    -o, --output-file <path>		Path for the VM image to be created
+
+	Optional Arguments:
+	    -s, --size <size>			Size of the disk image to create in MiB (default: $SIZE)
+	    -r, --remove			Remove output VM image if it exists (default: issue an error)
+	    -h, --help				Show this help text
+	EOF
+}
+
+ARGS=("$@")
+while test $# -gt 0; do
+	case "$1" in
+		-i|--image)
+			IMAGE="$2"
+			shift
+			;;
+		-o|--output-file)
+			OUT_FILE="$2"
+			shift
+			;;
+		-s|--size)
+			SIZE="$2"
+			shift
+			;;
+		-r|--remove)
+			REMOVE=true
+			;;
+		-h|--help)
+			usage
+			exit 0
+			;;
+	esac
+	shift
+done
+
+if [ -z "$IMAGE" ] || [ -z "$OUT_FILE" ]; then
+	usage
+	exit 1
+fi
+
+# This application needs to be run as root
+if [[ "$EUID" -ne 0 ]]; then
+        exec sudo "$0" "${ARGS[@]}"
+fi
+
+OUT_FILE="$(realpath $OUT_FILE)"
+
+if [ -f "$OUT_FILE" ]; then
+	if "$REMOVE"; then
+		rm "$OUT_FILE"
+	else
+                echo "Error: The output file already exists and --remove (-r) is not specified"
+                exit 1
+	fi
+fi
+
+if ! "$REMOVE" && [ -f "$OUT_FILE" ]; then
+	echo "Error: The output file already exists and --remove (-r) is not specified"
+	exit 1
+fi
+
+if [[ "$(docker images -q ${IMAGE})" == "" ]]; then
+	echo "Error: Docker image ${IMAGE} not found"
+	exit 1
+fi
+
+echo "Creating VM image file..."
+dd if=/dev/zero of="${OUT_FILE}" bs=1M status=progress count="${SIZE}"
+
+echo "Creating ext4 filesystem..."
+mkfs.ext4 "${OUT_FILE}"
+
+tmpdir="$(mktemp -d)"
+trap "{ echo 'Cleaning up...'; rm -rf $tmpdir; }" EXIT
+mount "${OUT_FILE}" "${tmpdir}"
+
+echo "Exporting docker image..."
+sha="$(docker run -d --entrypoint /bin/echo ${IMAGE})"
+docker export "${sha}" | tar -x -C "${tmpdir}"
+docker rm "${sha}" > /dev/null
+
+echo "Unmounting VM image..."
+umount "${tmpdir}"
+
+echo "VM image file successfully created from Docker image!"
